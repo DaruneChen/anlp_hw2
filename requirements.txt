@@ -1,0 +1,22 @@
+# Core
+requests
+beautifulsoup4
+pdfplumber
+
+# Chunking / retrieval
+sentence-transformers
+faiss-cpu          # use faiss-gpu if you have a GPU
+bm25s
+rank-bm25          # alternative BM25 impl to experiment with
+
+# Generation
+transformers
+accelerate
+torch
+
+# Evaluation
+rouge-score
+
+# Optional scraping helpers
+selenium
+lxml
