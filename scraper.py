@@ -39,6 +39,10 @@ SEED_URLS = [
     "https://www.cmu.edu/about/traditions.html",
     "https://www.cmu.edu/about/schools-colleges.html",
     "https://www.cmu.edu/engage/alumni/events/campus/index.html",
+    "https://www.cmu.edu/about/history#:~:text=%22My%20heart%20is%20in%20the,general%20public%20where%20few%20existed.",
+    "https://www.cmu.edu/50/#:~:text=A%20Celebration%2050%20Years%20in,own%20initiatives%2C%20creations%20and%20ideas.",
+    "https://www.tonyawards.com/press/carnegie-mellon-to-become-first-exclusive-higher-education-partner-of-the-tony-awards/#:~:text=More%20Info-,Carnegie%20Mellon%20to%20Become%20First%2C%20Exclusive%20Higher%20Education%20Partner%20of,one%20of%20the%20world's%20best.",
+    
     # Sports
     "https://en.wikipedia.org/wiki/Pittsburgh_Steelers",
     "https://en.wikipedia.org/wiki/Pittsburgh_Pirates",
