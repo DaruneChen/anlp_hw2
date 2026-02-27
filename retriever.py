@@ -86,7 +86,7 @@ class HybridRetriever:
     """
 
     def __init__(self, chunks: list[dict], dense_model: str = "all-MiniLM-L6-v2",
-                 rrf_k: int = 60, dense_weight: float = 0.5, sparse_weight: float = 0.5):
+                 rrf_k: int = 60, dense_weight: float = 0.7, sparse_weight: float = 0.3):
         self.chunks = chunks
         self.rrf_k = rrf_k
         self.dense_weight = dense_weight

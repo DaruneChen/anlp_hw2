@@ -3,9 +3,7 @@ scraper.py — Collect raw documents from Pittsburgh/CMU sources.
 Outputs plain text files to data/raw/.
 """
 
-import os
 import time
-import json
 import requests
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -17,32 +15,71 @@ RAW_DIR.mkdir(parents=True, exist_ok=True)
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; ANLP-HW2-Scraper/1.0)"}
 
-# ── Seed URLs ────────────────────────────────────────────────────────────────
+# ── Single-page seed URLs ─────────────────────────────────────────────────────
 SEED_URLS = [
-    # General Pittsburgh
+    # Pittsburgh general
     "https://en.wikipedia.org/wiki/Pittsburgh",
     "https://en.wikipedia.org/wiki/History_of_Pittsburgh",
+    "https://en.wikipedia.org/wiki/Geography_of_Pittsburgh",
+    "https://en.wikipedia.org/wiki/Culture_of_Pittsburgh",
+    "https://en.wikipedia.org/wiki/Economy_of_Pittsburgh",
     "https://www.britannica.com/place/Pittsburgh",
     "https://www.visitpittsburgh.com",
-    # CMU
-    "https://www.cmu.edu/about/",
-    # Sports
-    "https://www.visitpittsburgh.com/things-to-do/pittsburgh-sports-teams/",
-    # Food festivals
+    "https://www.visitpittsburgh.com/things-to-do/",
+    "https://www.visitpittsburgh.com/events-festivals/",
     "https://www.visitpittsburgh.com/events-festivals/food-festivals/",
+    "https://www.visitpittsburgh.com/things-to-do/pittsburgh-sports-teams/",
+    "https://www.visitpittsburgh.com/plan-your-trip/about-pittsburgh/",
+    # CMU
+    "https://en.wikipedia.org/wiki/Carnegie_Mellon_University",
+    "https://en.wikipedia.org/wiki/History_of_Carnegie_Mellon_University",
+    "https://en.wikipedia.org/wiki/Mellon_Institute_of_Industrial_Research",
+    "https://www.cmu.edu/about/",
+    "https://www.cmu.edu/about/history.html",
+    "https://www.cmu.edu/about/traditions.html",
+    "https://www.cmu.edu/about/schools-colleges.html",
+    "https://www.cmu.edu/engage/alumni/events/campus/index.html",
+    # Sports
+    "https://en.wikipedia.org/wiki/Pittsburgh_Steelers",
+    "https://en.wikipedia.org/wiki/Pittsburgh_Pirates",
+    "https://en.wikipedia.org/wiki/Pittsburgh_Penguins",
+    "https://www.steelers.com/team/history/",
+    "https://www.mlb.com/pirates/history",
+    "https://www.nhl.com/penguins/team/history",
+    # Food festivals
     "https://www.picklesburgh.com/",
     "https://www.pghtacofest.com/",
     "https://pittsburghrestaurantweek.com/",
-    # Culture
+    "https://littleitalydays.com",
+    "https://bananasplitfest.com",
+    # Culture & museums
+    "https://en.wikipedia.org/wiki/List_of_museums_in_Pittsburgh",
     "https://carnegiemuseums.org",
     "https://www.heinzhistorycenter.org",
+    "https://www.thefrickpittsburgh.org",
     "https://www.pittsburghsymphony.org",
     "https://pittsburghopera.org",
+    "https://trustarts.org",
     # Events
     "https://events.cmu.edu",
     "https://downtownpittsburgh.com/events/",
+    "https://www.pghcitypaper.com/pittsburgh/EventSearch?v=d",
 ]
 
+# ── URLs to crawl with subpages ───────────────────────────────────────────────
+CRAWL_URLS = [
+    ("https://www.cmu.edu/about/", "www.cmu.edu", 15),
+    ("https://www.pittsburghsymphony.org", "www.pittsburghsymphony.org", 10),
+    ("https://pittsburghopera.org", "pittsburghopera.org", 10),
+    ("https://carnegiemuseums.org", "carnegiemuseums.org", 10),
+    ("https://www.heinzhistorycenter.org", "www.heinzhistorycenter.org", 10),
+    ("https://www.picklesburgh.com/", "www.picklesburgh.com", 5),
+    ("https://downtownpittsburgh.com/events/", "downtownpittsburgh.com", 10),
+    ("https://trustarts.org", "trustarts.org", 10),
+]
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def fetch_html(url: str) -> str | None:
     try:
@@ -56,7 +93,6 @@ def fetch_html(url: str) -> str | None:
 
 def parse_text(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
-    # Remove nav, footer, scripts, styles
     for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
         tag.decompose()
     return " ".join(soup.get_text(separator=" ").split())
@@ -77,7 +113,7 @@ def scrape_url(url: str):
         return
     out_path = RAW_DIR / safe_filename(url)
     out_path.write_text(text, encoding="utf-8")
-    print(f"[OK] Saved {out_path.name} ({len(text)} chars)")
+    print(f"[OK] {out_path.name} ({len(text)} chars)")
 
 
 def scrape_pdf(url: str):
@@ -95,13 +131,54 @@ def scrape_pdf(url: str):
         print(f"[WARN] PDF failed {url}: {e}")
 
 
+def scrape_with_subpages(base_url: str, domain: str, max_pages: int = 10):
+    """Crawl a site and follow internal links up to max_pages."""
+    visited = set()
+    queue = [base_url]
+
+    while queue and len(visited) < max_pages:
+        url = queue.pop(0)
+        if url in visited:
+            continue
+        visited.add(url)
+
+        html = fetch_html(url)
+        if not html:
+            continue
+
+        text = parse_text(html)
+        if len(text) > 100:
+            out_path = RAW_DIR / safe_filename(url)
+            out_path.write_text(text, encoding="utf-8")
+            print(f"[OK] {url} ({len(text)} chars)")
+
+        soup = BeautifulSoup(html, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = urljoin(url, a["href"])
+            parsed = urlparse(href)
+            # Stay on same domain, skip anchors/query params/non-http
+            if (parsed.netloc == domain
+                    and parsed.scheme in ("http", "https")
+                    and not parsed.fragment
+                    and href not in visited):
+                queue.append(href)
+
+        time.sleep(0.5)
+
+
 def scrape_all():
+    print("=== Scraping single-page seed URLs ===")
     for url in SEED_URLS:
         if url.endswith(".pdf"):
             scrape_pdf(url)
         else:
             scrape_url(url)
-        time.sleep(1)  # be polite
+        time.sleep(1)
+
+    print("\n=== Crawling sites with subpages ===")
+    for base_url, domain, max_pages in CRAWL_URLS:
+        print(f"\n-- Crawling {domain} (max {max_pages} pages) --")
+        scrape_with_subpages(base_url, domain, max_pages)
 
 
 if __name__ == "__main__":
