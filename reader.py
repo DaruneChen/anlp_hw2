@@ -1,46 +1,121 @@
 """
-reader.py — LLM reader for RAG.
+reader.py — Improved LLM reader for CMU RAG assignment.
 
 Goals:
-- concise factual answers for overlap metrics
-- avoid hallucinations: if not in context => "unknown"
-- CPU-safe loading (no fp16 on CPU)
+- maximize factual extraction accuracy
+- minimize hallucinations
+- produce concise answers for F1 / ROUGE metrics
+- assignment-compliant (HuggingFace open models only)
 """
 
 from __future__ import annotations
 
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+import re
 import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
 
-SYSTEM_PROMPT = """You are a precise factual QA system for Pittsburgh and Carnegie Mellon University.
+SYSTEM_PROMPT = """You are a factual QA system for Pittsburgh and Carnegie Mellon University.
 
-Rules:
-- Use ONLY the provided context.
-- Answer as briefly as possible (name/date/number/short phrase).
-- Do NOT explain.
-- If the answer is not explicitly stated in the context, output: unknown
+CRITICAL RULES:
+- Use ONLY the provided context
+- Answer in as few words as possible
+- Prefer names, dates, numbers, or short phrases
+- Do NOT explain
+- Do NOT include extra words
+- If answer not present, output: unknown
 """
 
 
-def build_prompt(question: str, context_chunks: list[str]) -> str:
-    context = "\n\n".join(f"[{i+1}] {c}" for i, c in enumerate(context_chunks))
-    return f"""{SYSTEM_PROMPT}
+FEW_SHOT_EXAMPLES = [
+    {
+        "context":
+        "Pittsburgh was named in 1758 after William Pitt, the British Secretary of State.",
+        "question":
+        "Who is Pittsburgh named after?",
+        "answer":
+        "William Pitt",
+    },
+    {
+        "context":
+        "Carnegie Mellon University was founded in 1900 by Andrew Carnegie.",
+        "question":
+        "When was Carnegie Mellon University founded?",
+        "answer":
+        "1900",
+    },
+]
 
+
+def clean_answer(ans: str) -> str:
+    """
+    Aggressive cleaning to improve leaderboard metrics.
+    """
+    ans = ans.strip()
+
+    ans = ans.split("\n")[0]
+
+    ans = ans.strip('"').strip("'")
+
+    ans = re.sub(r"\.$", "", ans)
+
+    if "," in ans and len(ans.split()) > 4:
+        ans = ans.split(",")[0]
+
+    words = ans.split()
+    if len(words) > 10:
+        ans = " ".join(words[:10])
+
+    ans = ans.strip()
+
+    if not ans:
+        return "unknown"
+
+    return ans
+
+
+def build_prompt(question: str, context_chunks: list[str]) -> str:
+
+    examples = ""
+
+    for ex in FEW_SHOT_EXAMPLES:
+        examples += (
+            f"Context: {ex['context']}\n"
+            f"Question: {ex['question']}\n"
+            f"Answer: {ex['answer']}\n\n"
+        )
+
+    context = "\n\n".join(context_chunks)
+
+    prompt = f"""{SYSTEM_PROMPT}
+
+{examples}
 Context:
 {context}
 
 Question: {question}
+
 Answer:"""
+
+    return prompt
 
 
 class Reader:
-    def __init__(self, model_name: str, max_new_tokens: int = 64):
+
+    def __init__(
+        self,
+        model_name: str = "mistralai/Mistral-7B-Instruct-v0.2",
+        max_new_tokens: int = 32,
+    ):
+
         print(f"[Reader] Loading {model_name}...")
+
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         use_cuda = torch.cuda.is_available()
+
         dtype = torch.float16 if use_cuda else torch.float32
+
         device_map = "auto" if use_cuda else None
 
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -50,76 +125,34 @@ class Reader:
         )
 
         device = 0 if use_cuda else -1
+
         self.pipe = pipeline(
             "text-generation",
             model=self.model,
             tokenizer=self.tokenizer,
             max_new_tokens=max_new_tokens,
             do_sample=False,
+            temperature=0.0,
             device=device,
         )
-        print("[Reader] Model loaded.")
 
-    def answer(self, question: str, context_chunks: list[str]) -> str:
-        prompt = build_prompt(question, context_chunks)
-        out = self.pipe(prompt)[0]["generated_text"]
-        ans = out[len(prompt):].strip()
+        print("[Reader] Ready.")
 
-        ans = ans.split("\n", 1)[0].strip()
-        ans = ans.strip('"').strip("'").strip()
+    def answer(
+        self,
+        question: str,
+        context_chunks: list[str],
+    ) -> str:
 
-        if ans.lower().startswith("answer:"):
-            ans = ans.split(":", 1)[1].strip()
-
-        if not ans:
+        if not context_chunks:
             return "unknown"
 
-        # prevent multi-sentence rambling
-        if "." in ans and len(ans.split()) > 6:
-            ans = ans.split(".", 1)[0].strip()
+        prompt = build_prompt(question, context_chunks)
 
-        return ans
+        output = self.pipe(prompt)[0]["generated_text"]
 
+        answer = output[len(prompt):]
 
-FEW_SHOT_EXAMPLES = [
-    {
-        "question": "Who is Pittsburgh named after?",
-        "context": "Pittsburgh was named in 1758 after William Pitt, the British Secretary of State.",
-        "answer": "William Pitt",
-    },
-    {
-        "question": "When was Carnegie Mellon University founded?",
-        "context": "Carnegie Mellon University was founded in 1900 by Andrew Carnegie as the Carnegie Technical Schools.",
-        "answer": "1900",
-    },
-]
+        answer = clean_answer(answer)
 
-
-def build_few_shot_prompt(question: str, context_chunks: list[str]) -> str:
-    examples = ""
-    for ex in FEW_SHOT_EXAMPLES:
-        examples += (
-            f"Context: {ex['context']}\n"
-            f"Question: {ex['question']}\n"
-            f"Answer: {ex['answer']}\n\n"
-        )
-
-    context = "\n\n".join(context_chunks)
-    return f"""{SYSTEM_PROMPT}
-
-{examples}Context:
-{context}
-
-Question: {question}
-Answer:"""
-
-
-class FewShotReader(Reader):
-    def answer(self, question: str, context_chunks: list[str]) -> str:
-        prompt = build_few_shot_prompt(question, context_chunks)
-        out = self.pipe(prompt)[0]["generated_text"]
-        ans = out[len(prompt):].strip().split("\n", 1)[0].strip()
-        ans = ans.strip('"').strip("'").strip()
-        if ans.lower().startswith("answer:"):
-            ans = ans.split(":", 1)[1].strip()
-        return ans if ans else "unknown"
+        return answer

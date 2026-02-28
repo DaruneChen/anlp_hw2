@@ -78,7 +78,7 @@ def main() -> None:
     parser.add_argument("--top_k", type=int, default=8)
     parser.add_argument("--candidate_k", type=int, default=30)
 
-    parser.add_argument("--dense_model", default="BAAI/bge-large-en-v1.5")
+    parser.add_argument("--dense_model", default="intfloat/e5-large-v2")
     parser.add_argument("--dense_index", default="data/dense_index")
     parser.add_argument("--rrf_k", type=int, default=60)
     parser.add_argument("--dense_weight", type=float, default=0.7)
@@ -86,7 +86,7 @@ def main() -> None:
 
     parser.add_argument("--model", default="mistralai/Mistral-7B-Instruct-v0.2")
     parser.add_argument("--no_reranker", action="store_true")
-    parser.add_argument("--reranker_model", default="cross-encoder/ms-marco-MiniLM-L-6-v2")
+    parser.add_argument("--reranker_model", default="BAAI/bge-reranker-base")
 
     args = parser.parse_args()
 

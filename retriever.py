@@ -149,7 +149,15 @@ class HybridRetriever:
         for rank, (idx, _raw) in enumerate(results):
             scores[idx] = scores.get(idx, 0.0) + weight * (1.0 / (self.rrf_k + rank + 1))
         return scores
-
+    def expand_query(query):
+        expansions = [
+            query,
+            query.replace("CMU", "Carnegie Mellon University"),
+            query.replace("Pittsburgh", "City of Pittsburgh"),
+            query + " history",
+            query + " event",
+        ]
+        return list(set(expansions))
     def retrieve(self, query: str, top_k: int, candidate_k: int) -> list[RetrievedChunk]:
         if candidate_k < top_k:
             candidate_k = top_k
