@@ -23,8 +23,7 @@ from pathlib import Path
 
 from chunker import chunk_all
 from retriever import HybridRetriever
-from reader import FewShotReader
-
+from reader import Reader
 
 def load_queries(path: str) -> dict[str, str]:
     with open(path, encoding="utf-8") as f:
@@ -128,8 +127,8 @@ def main() -> None:
         retriever.build_index()
         retriever.save_dense_index(args.dense_index)
 
-    reader = FewShotReader(model_name=args.model)
-
+    reader = Reader(model_name=args.model)
+    
     reranker = None
     if not args.no_reranker:
         reranker = load_reranker(args.reranker_model)

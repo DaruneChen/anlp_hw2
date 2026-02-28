@@ -1,103 +1,18 @@
 """
-reader.py — Improved LLM reader for CMU RAG assignment.
+reader.py — optimized reader for CMU HW2 RAG
 
-Goals:
-- maximize factual extraction accuracy
-- minimize hallucinations
-- produce concise answers for F1 / ROUGE metrics
-- assignment-compliant (HuggingFace open models only)
+Fixes:
+• prevents prompt from being returned as answer
+• removes hidden max_length truncation
+• produces concise factual answers
+• compatible with pipeline.py (FewShotReader alias)
 """
 
 from __future__ import annotations
 
-import re
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-
-
-SYSTEM_PROMPT = """You are a factual QA system for Pittsburgh and Carnegie Mellon University.
-
-CRITICAL RULES:
-- Use ONLY the provided context
-- Answer in as few words as possible
-- Prefer names, dates, numbers, or short phrases
-- Do NOT explain
-- Do NOT include extra words
-- If answer not present, output: unknown
-"""
-
-
-FEW_SHOT_EXAMPLES = [
-    {
-        "context":
-        "Pittsburgh was named in 1758 after William Pitt, the British Secretary of State.",
-        "question":
-        "Who is Pittsburgh named after?",
-        "answer":
-        "William Pitt",
-    },
-    {
-        "context":
-        "Carnegie Mellon University was founded in 1900 by Andrew Carnegie.",
-        "question":
-        "When was Carnegie Mellon University founded?",
-        "answer":
-        "1900",
-    },
-]
-
-
-def clean_answer(ans: str) -> str:
-    """
-    Aggressive cleaning to improve leaderboard metrics.
-    """
-    ans = ans.strip()
-
-    ans = ans.split("\n")[0]
-
-    ans = ans.strip('"').strip("'")
-
-    ans = re.sub(r"\.$", "", ans)
-
-    if "," in ans and len(ans.split()) > 4:
-        ans = ans.split(",")[0]
-
-    words = ans.split()
-    if len(words) > 10:
-        ans = " ".join(words[:10])
-
-    ans = ans.strip()
-
-    if not ans:
-        return "unknown"
-
-    return ans
-
-
-def build_prompt(question: str, context_chunks: list[str]) -> str:
-
-    examples = ""
-
-    for ex in FEW_SHOT_EXAMPLES:
-        examples += (
-            f"Context: {ex['context']}\n"
-            f"Question: {ex['question']}\n"
-            f"Answer: {ex['answer']}\n\n"
-        )
-
-    context = "\n\n".join(context_chunks)
-
-    prompt = f"""{SYSTEM_PROMPT}
-
-{examples}
-Context:
-{context}
-
-Question: {question}
-
-Answer:"""
-
-    return prompt
+import re
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
 class Reader:
@@ -105,54 +20,104 @@ class Reader:
     def __init__(
         self,
         model_name: str = "mistralai/Mistral-7B-Instruct-v0.2",
-        max_new_tokens: int = 32,
+        max_new_tokens: int = 64,
     ):
 
-        print(f"[Reader] Loading {model_name}...")
+        print(f"[Reader] Loading {model_name}")
+
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        use_cuda = torch.cuda.is_available()
-
-        dtype = torch.float16 if use_cuda else torch.float32
-
-        device_map = "auto" if use_cuda else None
-
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=dtype,
-            device_map=device_map,
+            torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+            device_map="auto" if self.device == "cuda" else None,
         )
 
-        device = 0 if use_cuda else -1
+        # CRITICAL FIX — remove hidden truncation limit
+        self.model.generation_config.max_length = None
+        self.model.generation_config.max_new_tokens = max_new_tokens
 
-        self.pipe = pipeline(
-            "text-generation",
-            model=self.model,
-            tokenizer=self.tokenizer,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            temperature=0.0,
-            device=device,
-        )
+        self.max_new_tokens = max_new_tokens
 
-        print("[Reader] Ready.")
+        print("[Reader] Ready")
 
-    def answer(
+
+    def generate_answer(
         self,
-        question: str,
-        context_chunks: list[str],
+        query: str,
+        contexts: list[str],
     ) -> str:
 
-        if not context_chunks:
+        if not contexts:
             return "unknown"
 
-        prompt = build_prompt(question, context_chunks)
+        context = "\n\n".join(contexts[:10])
 
-        output = self.pipe(prompt)[0]["generated_text"]
+        prompt = f"""
+Answer the question using ONLY the context.
 
-        answer = output[len(prompt):]
+Return ONLY the short answer phrase.
+Do NOT explain.
 
-        answer = clean_answer(answer)
+Context:
+{context}
+
+Question:
+{query}
+
+Answer:
+""".strip()
+
+        inputs = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=4096,
+        ).to(self.device)
+
+        input_length = inputs["input_ids"].shape[1]
+
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=self.max_new_tokens,
+            do_sample=False,
+            temperature=0.0,
+            eos_token_id=self.tokenizer.eos_token_id,
+            pad_token_id=self.tokenizer.eos_token_id,
+        )
+
+        # decode ONLY generated tokens
+        new_tokens = outputs[0][input_length:]
+
+        answer = self.tokenizer.decode(
+            new_tokens,
+            skip_special_tokens=True
+        ).strip()
+
+        # truncate safely
+        answer = re.split(r"[.\n]", answer)[0]
+
+        answer = " ".join(answer.split()[:12])
+
+        answer = answer.strip()
+
+        if len(answer) == 0:
+            return "unknown"
 
         return answer
+
+
+    # pipeline.py calls this function
+    def answer(
+        self,
+        query: str,
+        contexts: list[str],
+    ) -> str:
+
+        return self.generate_answer(query, contexts)
+
+
+# REQUIRED alias for pipeline.py
+FewShotReader = Reader
